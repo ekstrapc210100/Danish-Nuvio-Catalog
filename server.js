@@ -18,9 +18,12 @@ if (pool) {
   pool.on("error", (err) => console.error("Postgres pool error:", err.message));
 }
 
-// TMDB genre ids used by the genre-filtered catalogs below, mapped to the
-// Danish genre names discover.js stores (fetched from TMDB's own da-DK
-// genre list, so this must match exactly).
+// TMDB genre ids used by the genre-filtered catalogs, mapped to the Danish
+// genre names discover.js stores. Seeded with the 3 genres used by the
+// built-in catalogs; loadGenreLists() below fills in the rest (all TMDB
+// movie + tv genres, in da-DK) at boot so user-created custom categories can
+// filter by any genre too, matching exactly what discover.js writes to the
+// database.
 const GENRE_ID_TO_NAME = {
   35: "Komedie",
   80: "Kriminalitet",
@@ -284,7 +287,7 @@ function resolveCatalogName(catalog) {
 
 const manifest = {
   id: "dk.danish.nuvio.katalog",
-  version: "2.3.0",
+  version: "2.4.0",
   name: "Dansk Film – Nuvio",
   description:
     "Danske film og serier med dynamiske kataloger, søgning, metadata, kvalitetsfiltre og konfigurerbare kataloger.",
@@ -312,7 +315,75 @@ const CACHE_MS = 15 * 60 * 1000;
 const DETAIL_CACHE_MS = 60 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 500;
 
+// --- Custom (user-defined) categories -------------------------------------
+//
+// A custom category is never stored server-side. Its whole definition
+// (name, type, genre, filters, sort) is base64url-encoded straight into the
+// catalog id, prefixed "cx_", so the catalog and meta handlers below can
+// rebuild it purely from the id on any request — no database row, no
+// per-install state, consistent with how /c/:config already encodes which
+// built-in catalogs are selected.
+function encodeCustomDef(def) {
+  return "cx_" + Buffer.from(JSON.stringify(def), "utf8").toString("base64url");
+}
+
+function buildCustomCatalog(def) {
+  if (!def || (def.type !== "movie" && def.type !== "series")) return null;
+
+  const type = def.type;
+  const params = { ...DANISH_FILTER };
+
+  if (def.genre) {
+    params.with_genres = String(def.genre);
+  }
+
+  params["vote_count.gte"] = String(def.minVotes && def.minVotes > 0 ? def.minVotes : 1);
+
+  if (def.minRating && def.minRating > 0) {
+    params["vote_average.gte"] = String(def.minRating);
+  }
+
+  if (def.yearFrom || def.yearTo) {
+    Object.assign(
+      params,
+      releaseDateParams(type, {
+        gte: def.yearFrom ? `${def.yearFrom}-01-01` : undefined,
+        lte: def.yearTo ? `${def.yearTo}-12-31` : undefined
+      })
+    );
+  }
+
+  const dateField = type === "movie" ? "primary_release_date" : "first_air_date";
+  const sortMap = {
+    rating: "vote_average.desc",
+    newest: `${dateField}.desc`,
+    popularity: "popularity.desc"
+  };
+  params.sort_by = sortMap[def.sort] || sortMap.popularity;
+
+  const name = String(def.name || "Min kategori").slice(0, 60);
+
+  return {
+    type,
+    id: encodeCustomDef(def),
+    name: `✨ ${name}`,
+    params
+  };
+}
+
+function decodeCustomCatalog(id) {
+  try {
+    const json = Buffer.from(id.slice(3), "base64url").toString("utf8");
+    return buildCustomCatalog(JSON.parse(json));
+  } catch {
+    return null;
+  }
+}
+
 function getCatalog(id) {
+  if (typeof id === "string" && id.startsWith("cx_")) {
+    return decodeCustomCatalog(id);
+  }
   return catalogs.find((catalog) => catalog.id === id);
 }
 
@@ -356,6 +427,37 @@ async function tmdb(path, params = {}) {
 
   return response.json();
 }
+
+// Full TMDB genre lists (movie + tv, da-DK), used to populate the "create
+// your own category" genre dropdown on the landing page. Loaded once at
+// boot (best-effort) and also merged into GENRE_ID_TO_NAME, so custom
+// categories can be served straight from the database once it has matching
+// rows, not just live from TMDB.
+let genreListsCache = null;
+
+async function loadGenreLists() {
+  if (genreListsCache) return genreListsCache;
+
+  const [movieData, tvData] = await Promise.all([
+    tmdb("/genre/movie/list", {}),
+    tmdb("/genre/tv/list", {})
+  ]);
+
+  genreListsCache = {
+    movie: movieData.genres || [],
+    tv: tvData.genres || []
+  };
+
+  for (const g of [...genreListsCache.movie, ...genreListsCache.tv]) {
+    GENRE_ID_TO_NAME[g.id] = g.name;
+  }
+
+  return genreListsCache;
+}
+
+loadGenreLists().catch((error) => {
+  console.error("Failed to preload TMDB genre lists:", error.message);
+});
 
 function clean(value) {
   return value === null || value === undefined || value === ""
@@ -485,6 +587,11 @@ function buildDbCatalogQuery(catalog, page) {
   if (params["vote_count.gte"]) {
     conditions.push(`vote_count >= $${idx++}`);
     values.push(Number(params["vote_count.gte"]));
+  }
+
+  if (params["vote_average.gte"]) {
+    conditions.push(`vote_average >= $${idx++}`);
+    values.push(Number(params["vote_average.gte"]));
   }
 
   if (params.with_genres) {
@@ -685,22 +792,12 @@ function publicBase(req) {
   return (BASE_URL || `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
 }
 
-function selectedCatalogs(value) {
-  if (!value) {
-    return catalogs;
-  }
-
-  const ids = String(value)
-    .split(",")
-    .map((id) => id.trim())
-    .filter(Boolean);
-
+// Only built-in catalogs (the id-based ones) can be selected/deselected —
+// custom categories are handled entirely separately, see parseConfig().
+function filterBuiltInCatalogs(ids) {
   const allowed = new Set(catalogs.map((catalog) => catalog.id));
   const unique = [...new Set(ids)].filter((id) => allowed.has(id));
-
-  return unique.length
-    ? catalogs.filter((catalog) => unique.includes(catalog.id))
-    : catalogs;
+  return catalogs.filter((catalog) => unique.includes(catalog.id));
 }
 
 function manifestFor(catalogList) {
@@ -718,16 +815,38 @@ function manifestFor(catalogList) {
   };
 }
 
-function encodeConfig(ids) {
-  return Buffer.from(ids.join(","), "utf8").toString("base64url");
-}
-
 function decodeConfig(value) {
   try {
     return Buffer.from(String(value), "base64url").toString("utf8");
   } catch {
     return "";
   }
+}
+
+// The /c/:config link started out encoding just a comma-separated list of
+// selected built-in catalog ids. It now encodes JSON — {ids, custom} — so
+// links can also carry user-created categories. Old links (plain comma
+// list, not valid JSON) still decode correctly via the fallback branch, so
+// nobody's existing install breaks.
+function parseConfig(raw) {
+  if (!raw) return { ids: [], custom: [] };
+
+  try {
+    const obj = JSON.parse(raw);
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+      return {
+        ids: Array.isArray(obj.ids) ? obj.ids : [],
+        custom: Array.isArray(obj.custom) ? obj.custom : []
+      };
+    }
+  } catch {
+    // not JSON — legacy plain comma-separated id list
+  }
+
+  return {
+    ids: raw.split(",").map((id) => id.trim()).filter(Boolean),
+    custom: []
+  };
 }
 
 const landingPage = (req) => {
@@ -859,9 +978,32 @@ h2{font-size:20px;line-height:1.2;margin:0 0 7px}
 .note{font-size:13px;color:var(--muted);line-height:1.55;margin-top:14px}
 .status{min-height:18px;color:#8fe0a7;font-size:13px;font-weight:650;margin:9px 2px 0}
 .footer{text-align:center;color:#6f7a8b;font-size:12px;margin-top:22px}
+.field{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}
+.field label{
+  font-size:12px;color:var(--muted);font-weight:650;
+  text-transform:uppercase;letter-spacing:.5px;
+}
+.field input,.field select{
+  background:#111722;border:1px solid var(--border);border-radius:10px;
+  color:var(--text);padding:10px 12px;font-size:14px;font-family:inherit;
+}
+.field select{appearance:none}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 4px}
+.chip{
+  display:flex;align-items:center;gap:8px;
+  background:#1a2230;border:1px solid var(--border);border-radius:999px;
+  padding:7px 8px 7px 14px;font-size:13px;
+}
+.chip button{
+  border:0;background:rgba(226,29,53,.2);color:#ff8a97;
+  width:20px;height:20px;border-radius:50%;cursor:pointer;font-size:13px;line-height:1;
+  flex:0 0 auto;
+}
 @media(max-width:560px){
   main{padding:24px 14px 60px}
   .grid{grid-template-columns:1fr}
+  .row{grid-template-columns:1fr}
   .hero h1{font-size:28px}
   .card{padding:18px}
   .url{border-radius:17px}
@@ -896,7 +1038,7 @@ h2{font-size:20px;line-height:1.2;margin:0 0 7px}
 
 <section class="card">
   <h2>⚙️ Customize catalogs</h2>
-  <p class="sub">Choose exactly which catalogs you want to install.</p>
+  <p class="sub">Choose exactly which catalogs you want to install. Uncheck any you don't want to see.</p>
 
   <div class="actions">
     <button class="secondary" id="all">Select all</button>
@@ -904,6 +1046,70 @@ h2{font-size:20px;line-height:1.2;margin:0 0 7px}
   </div>
 
   <div class="grid" id="catalogs"></div>
+</section>
+
+<section class="card">
+  <h2>✨ Create your own category</h2>
+  <p class="sub">Build a category with your own filters — genre, rating, year range and sorting. Added categories are included in the installation link below.</p>
+
+  <div class="field">
+    <label>Name</label>
+    <input type="text" id="cName" maxlength="40" placeholder="e.g. Danish Christmas movies">
+  </div>
+
+  <div class="row">
+    <div class="field">
+      <label>Type</label>
+      <select id="cType">
+        <option value="movie">Movies</option>
+        <option value="series">Series</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Genre</label>
+      <select id="cGenre"><option value="">Any genre</option></select>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="field">
+      <label>Min. rating (0–10)</label>
+      <input type="number" id="cRating" min="0" max="10" step="0.1" placeholder="e.g. 6.5">
+    </div>
+    <div class="field">
+      <label>Min. votes</label>
+      <input type="number" id="cVotes" min="0" placeholder="e.g. 10">
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="field">
+      <label>Year from</label>
+      <input type="number" id="cYearFrom" placeholder="e.g. 2000">
+    </div>
+    <div class="field">
+      <label>Year to</label>
+      <input type="number" id="cYearTo" placeholder="e.g. 2026">
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Sort by</label>
+    <select id="cSort">
+      <option value="popularity">Popularity</option>
+      <option value="rating">Rating</option>
+      <option value="newest">Newest first</option>
+    </select>
+  </div>
+
+  <button class="secondary" id="addCategory" style="width:100%">+ Add category</button>
+
+  <div class="chips" id="customChips"></div>
+</section>
+
+<section class="card">
+  <h2>📎 Your installation link</h2>
+  <p class="sub">Includes the catalogs you selected above plus any categories you created.</p>
 
   <div class="url-wrap">
     <div class="url-label"><span>Your installation link</span><span>Dynamic</span></div>
@@ -950,6 +1156,8 @@ const list=document.getElementById("catalogs");
 const custom=document.getElementById("customUrl");
 const standardBox=document.getElementById("standardUrl");
 const boxes=[];
+let genreLists={movie:[],tv:[]};
+let customCatalogs=[];
 
 function render(){
   list.innerHTML="";
@@ -980,11 +1188,12 @@ function render(){
 function urlFor(){
   const ids=boxes.filter(x=>x.checked).map(x=>x.dataset.id);
 
-  if(!ids.length){
+  if(!ids.length && !customCatalogs.length){
     return base+"/manifest.json";
   }
 
-  const encoded=btoa(unescape(encodeURIComponent(ids.join(","))))
+  const payload=JSON.stringify({ids,custom:customCatalogs});
+  const encoded=btoa(unescape(encodeURIComponent(payload)))
     .replace(/=+$/,"")
     .replace(/\\+/g,"-")
     .replace(/\\//g,"_");
@@ -1055,6 +1264,102 @@ document.getElementById("none").addEventListener("click",()=>{
   update();
 });
 
+function populateGenreSelect(){
+  const type=document.getElementById("cType").value;
+  const listData=type==="series"?genreLists.tv:genreLists.movie;
+  const select=document.getElementById("cGenre");
+  const current=select.value;
+  select.innerHTML='<option value="">Any genre</option>';
+  listData.forEach(g=>{
+    const opt=document.createElement("option");
+    opt.value=g.id;
+    opt.textContent=g.name;
+    select.append(opt);
+  });
+  if([...select.options].some(o=>o.value===current)) select.value=current;
+}
+
+document.getElementById("cType").addEventListener("change",populateGenreSelect);
+
+fetch("/internal/genres")
+  .then(r=>r.json())
+  .then(data=>{
+    genreLists={movie:data.movie||[],tv:data.tv||[]};
+    populateGenreSelect();
+  })
+  .catch(()=>{});
+
+function renderChips(){
+  const wrap=document.getElementById("customChips");
+  wrap.innerHTML="";
+  customCatalogs.forEach((def,i)=>{
+    const chip=document.createElement("div");
+    chip.className="chip";
+
+    const span=document.createElement("span");
+    span.textContent=(def.type==="series"?"📺 ":"🎬 ")+def.name;
+
+    const btn=document.createElement("button");
+    btn.type="button";
+    btn.textContent="×";
+    btn.addEventListener("click",()=>{
+      customCatalogs.splice(i,1);
+      renderChips();
+      update();
+    });
+
+    chip.append(span,btn);
+    wrap.append(chip);
+  });
+}
+
+document.getElementById("addCategory").addEventListener("click",()=>{
+  const nameField=document.getElementById("cName");
+  const name=nameField.value.trim();
+
+  if(!name){
+    nameField.focus();
+    return;
+  }
+
+  if(customCatalogs.length>=8){
+    alert("You can add up to 8 custom categories.");
+    return;
+  }
+
+  const def={
+    name,
+    type:document.getElementById("cType").value,
+    sort:document.getElementById("cSort").value
+  };
+
+  const genre=document.getElementById("cGenre").value;
+  if(genre) def.genre=Number(genre);
+
+  const rating=document.getElementById("cRating").value;
+  if(rating) def.minRating=Number(rating);
+
+  const votes=document.getElementById("cVotes").value;
+  if(votes) def.minVotes=Number(votes);
+
+  const yf=document.getElementById("cYearFrom").value;
+  if(yf) def.yearFrom=Number(yf);
+
+  const yt=document.getElementById("cYearTo").value;
+  if(yt) def.yearTo=Number(yt);
+
+  customCatalogs.push(def);
+
+  nameField.value="";
+  document.getElementById("cRating").value="";
+  document.getElementById("cVotes").value="";
+  document.getElementById("cYearFrom").value="";
+  document.getElementById("cYearTo").value="";
+
+  renderChips();
+  update();
+});
+
 render();
 </script>
 </body>
@@ -1070,8 +1375,36 @@ app.get("/manifest.json", (req, res) => {
 });
 
 app.get("/c/:config/manifest.json", (req, res) => {
-  const ids = decodeConfig(req.params.config);
-  res.json(manifestFor(selectedCatalogs(ids)));
+  const parsed = parseConfig(decodeConfig(req.params.config));
+  const builtIn = filterBuiltInCatalogs(parsed.ids);
+  const custom = parsed.custom
+    .map((def) => buildCustomCatalog(def))
+    .filter(Boolean)
+    .slice(0, 8);
+
+  res.json(manifestFor([...builtIn, ...custom]));
+});
+
+// The addon's own router (catalog/meta handlers) also has to be reachable
+// under /c/:config/... — Nuvio resolves those requests relative to wherever
+// manifest.json was fetched from. Without this, a customized installation
+// link's manifest would list the right catalogs, but every catalog request
+// for it would 404. The handlers themselves don't need the :config value —
+// catalog lookup already works from the id alone (including "cx_" custom
+// ids), so mounting the same router here is enough.
+app.use("/c/:config", router);
+
+// Small read-only proxy for TMDB's own genre lists (da-DK), used to
+// populate the "create your own category" genre dropdown on the landing
+// page. Cached in-memory after the first successful load.
+app.get("/internal/genres", async (req, res) => {
+  try {
+    const lists = await loadGenreLists();
+    res.json(lists);
+  } catch (error) {
+    console.error("Genre list error:", error.message);
+    res.status(502).json({ error: "Failed to load genres" });
+  }
 });
 
 // Triggers a discovery pass that pulls fresh pages from TMDB and upserts
