@@ -1800,9 +1800,16 @@ app.post("/internal/discover", async (req, res) => {
   }
 
   try {
+    // Optional ?pages=N runs a one-off backfill of up to N pages per type
+    // (stops at the end of the catalog, ignores the once-an-hour limit).
+    const requested = parseInt(String(req.query.pages || ""), 10);
+    const backfillPages =
+      Number.isFinite(requested) && requested > 0 ? Math.min(requested, 400) : null;
+
     const summary = await runDiscovery({
       apiKey: TMDB_API_KEY,
-      databaseUrl: process.env.DATABASE_URL
+      databaseUrl: process.env.DATABASE_URL,
+      ...(backfillPages ? { pagesPerRun: backfillPages, force: true, backfill: true } : {})
     });
     res.json(summary);
   } catch (error) {

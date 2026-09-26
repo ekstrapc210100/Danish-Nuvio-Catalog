@@ -83,7 +83,7 @@ function mapItem(item, type, genreMap) {
  * the end — page 1 is already covered separately). Returns the mapped
  * items and where the cursor should start next time.
  */
-async function discoverType(apiKey, type, startPage, pagesPerRun) {
+async function discoverType(apiKey, type, startPage, pagesPerRun, { backfill = false, deadline = Infinity } = {}) {
   const mediaType = type === "movie" ? "movie" : "tv";
   const dateField = type === "movie" ? "primary_release_date" : "first_air_date";
   const genreMap = await loadGenreMap(apiKey, mediaType);
@@ -109,12 +109,19 @@ async function discoverType(apiKey, type, startPage, pagesPerRun) {
   let cursor = Math.min(Math.max(startPage, 2), Math.max(totalPages, 2));
   let pagesFetched = 0;
 
-  while (pagesFetched < pagesPerRun && totalPages > 1) {
+  // backfill: stop at the end of the catalog instead of wrapping around, so
+  // one large run fetches the whole remainder exactly once.
+  // deadline: no more pages after this timestamp (ms); the cursor still
+  // advances correctly, so the next run resumes where this one stopped.
+  while (pagesFetched < pagesPerRun && totalPages > 1 && Date.now() < deadline) {
     const data = await fetchPage(cursor);
     items.push(...(data.results || []));
     pagesFetched++;
     cursor++;
-    if (cursor > totalPages) cursor = 2; // wrap, skipping page 1 (already covered)
+    if (cursor > totalPages) {
+      cursor = 2; // wrap, skipping page 1 (already covered)
+      if (backfill) break;
+    }
   }
 
   return {
@@ -207,7 +214,14 @@ async function setCursor(client, type, nextPage, totalPages) {
  * Skips the work (returns the previous run's summary) if the last run was
  * more recent than MIN_INTERVAL_MS, which limits the damage of repeated calls.
  */
-async function runDiscovery({ apiKey, databaseUrl, pagesPerRun = DEFAULT_PAGES_PER_RUN, force = false } = {}) {
+async function runDiscovery({
+  apiKey,
+  databaseUrl,
+  pagesPerRun = DEFAULT_PAGES_PER_RUN,
+  force = false,
+  backfill = false,
+  budgetMs = 200000
+} = {}) {
   if (!apiKey) throw new Error("Missing TMDB API key");
   if (!databaseUrl) throw new Error("Missing database URL");
 
@@ -235,16 +249,24 @@ async function runDiscovery({ apiKey, databaseUrl, pagesPerRun = DEFAULT_PAGES_P
       const movieStart = await getCursor(client, "movie");
       const seriesStart = await getCursor(client, "series");
 
+      const options = { backfill, deadline: Date.now() + budgetMs };
       const [movies, series] = await Promise.all([
-        discoverType(apiKey, "movie", movieStart, pagesPerRun),
-        discoverType(apiKey, "series", seriesStart, pagesPerRun)
+        discoverType(apiKey, "movie", movieStart, pagesPerRun, options),
+        discoverType(apiKey, "series", seriesStart, pagesPerRun, options)
       ]);
 
       await setCursor(client, "movie", movies.nextPage, movies.totalPages);
       await setCursor(client, "series", series.nextPage, series.totalPages);
 
       const all = [...movies.items, ...series.items];
-      const { created, updated } = await bulkUpsert(client, all);
+      // Upsert in chunks so a large backfill doesn't build one huge query.
+      let created = 0;
+      let updated = 0;
+      for (let i = 0; i < all.length; i += 500) {
+        const result = await bulkUpsert(client, all.slice(i, i + 500));
+        created += result.created;
+        updated += result.updated;
+      }
 
       await client.query(
         `UPDATE discovery_runs

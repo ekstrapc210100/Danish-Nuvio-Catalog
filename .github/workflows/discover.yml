@@ -5,7 +5,12 @@ on:
     # 03:17 UTC every day — off-peak, avoids the exact-hour rush other
     # scheduled jobs pile onto.
     - cron: "17 3 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      pages:
+        description: "Optional one-off backfill: fetch up to this many pages per type (e.g. 150). Leave empty for a normal run."
+        required: false
+        default: ""
 
 jobs:
   trigger-discovery:
@@ -14,10 +19,13 @@ jobs:
       - name: Call /internal/discover on the live addon
         env:
           DISCOVER_SECRET: ${{ secrets.DISCOVER_SECRET }}
+          PAGES: ${{ inputs.pages }}
         run: |
+          url="https://danish-nuvio-catalog.onrender.com/internal/discover"
+          if [[ "$PAGES" =~ ^[0-9]+$ ]]; then url="$url?pages=$PAGES"; fi
           curl -sS -X POST \
             --max-time 280 \
             --retry 3 --retry-delay 20 --retry-all-errors --fail-with-body \
             -H "Authorization: Bearer $DISCOVER_SECRET" \
             -w "\nHTTP status: %{http_code}\n" \
-            https://danish-nuvio-catalog.onrender.com/internal/discover
+            "$url"
