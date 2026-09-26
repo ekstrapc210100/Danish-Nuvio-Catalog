@@ -26,7 +26,10 @@
 - 📺 **16 optional streaming catalogs** — Danish titles on Netflix, Disney+,
   Prime Video, Viaplay, HBO Max, SkyShowtime, TV 2 Play, DRTV and Nordisk Film+
 - 🗓️ **Kommer snart** — upcoming Danish films and series with exact release dates
-- 🔎 **Search**, scoped to Danish titles
+- 🎭 **Actor and director catalogs** — Danish films with or by Mads Mikkelsen,
+  Trine Dyrholm, Lars von Trier, Thomas Vinterberg and more
+- 🔎 **Search** by title *or* by actor/director name, scoped to Danish titles
+- 📊 **[Status page](https://danish-nuvio-catalog.onrender.com/status)** — database size and discovery runs
 - 🧩 **Build your own** — a web installer lets you pick catalogs and create
   custom categories (genre, rating, years, sort order)
 - 🗄️ **Fast** — catalogs are served from a Postgres database that fills itself
@@ -103,6 +106,16 @@ They are **off by default** — tick them in the web installer to add them.
 
 A service only shows the types TMDB has Danish titles for.
 
+### Actor and director catalogs (optional)
+
+Danish films with or by a person. Also **off by default**. Each person is looked
+up by name at request time. Directors are matched on any crew credit, so a
+producer credit can occasionally bring in an extra film.
+
+| Actors | Directors |
+|---|---|
+| Mads Mikkelsen · Nikolaj Lie Kaas · Trine Dyrholm · Pilou Asbæk · Nikolaj Coster-Waldau | Lars von Trier · Thomas Vinterberg · Susanne Bier |
+
 ### Custom categories
 
 The web installer can also build personal categories from a genre, minimum
@@ -131,6 +144,10 @@ flowchart LR
 - **Scheduling** is done with free GitHub Actions instead of a paid Render Cron
   Job. The daily run calls `POST /internal/discover`, protected by a shared
   secret. A second workflow keeps the free Render service awake.
+- **Search** looks up titles and, for movies, also checks whether the query is an
+  actor's or director's name and adds their Danish films.
+- **Status:** `/status` (and `/status.json`) shows database connectivity, title
+  counts, discovery progress and the last five runs — aggregate numbers only.
 - **Caching:** catalog pages are cached in memory for 15 minutes and detailed
   metadata for 60 minutes to keep TMDB usage low.
 
