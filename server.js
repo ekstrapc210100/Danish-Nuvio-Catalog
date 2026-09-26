@@ -395,13 +395,42 @@ for (const person of PEOPLE) {
   });
 }
 
+// Curated "samlinger". Opt-in, live from TMDB, looked up by name.
+const COLLECTIONS = [
+  { id: "samling_julefilm", type: "movie", name: "🎄 Danske julefilm", lookup: { kind: "keyword", query: "christmas" } },
+  { id: "samling_julekalendere", type: "series", name: "🎄 Danske julekalendere og julserier", lookup: { kind: "keyword", query: "christmas" } },
+  { id: "samling_nordic_noir_film", type: "movie", name: "🕵️ Nordic Noir – film", lookup: { kind: "keyword", query: "nordic noir" } },
+  { id: "samling_nordic_noir_serier", type: "series", name: "🕵️ Nordic Noir – serier", lookup: { kind: "keyword", query: "nordic noir" } },
+  { id: "samling_dogme95", type: "movie", name: "🎞️ Dogme 95", lookup: { kind: "keyword", query: "dogme 95" } },
+  { id: "samling_olsen_banden", type: "movie", name: "🎩 Olsen-banden", lookup: { kind: "collection", query: "Olsen-banden" } },
+  { id: "samling_far_til_fire", type: "movie", name: "👨‍👩‍👧‍👦 Far til fire", lookup: { kind: "collection", query: "Far til fire" } },
+  { id: "samling_zentropa", type: "movie", name: "🎬 Zentropa", lookup: { kind: "company", query: "Zentropa" } },
+  { id: "samling_nordisk_film", type: "movie", name: "🎬 Nordisk Film", lookup: { kind: "company", query: "Nordisk Film" } }
+];
+
+for (const collection of COLLECTIONS) {
+  catalogs.push({
+    type: collection.type,
+    id: collection.id,
+    name: collection.name,
+    optIn: true,
+    live: true,
+    lookup: collection.lookup,
+    params: {
+      ...DANISH_FILTER,
+      "vote_count.gte": "1",
+      sort_by: "popularity.desc"
+    }
+  });
+}
+
 function resolveCatalogName(catalog) {
   return catalog.name.replace("{YEAR}", String(new Date().getUTCFullYear()));
 }
 
 const manifest = {
   id: "dk.danish.nuvio.katalog",
-  version: "2.7.0",
+  version: "2.8.0",
   name: "Danish Nuvio Catalog",
   description:
     "Danske film og serier med dynamiske kataloger, søgning, metadata, kvalitetsfiltre og konfigurerbare kataloger.",
@@ -549,6 +578,59 @@ async function lookupPerson(name) {
     personIdCache.get(key).catch(() => personIdCache.delete(key));
   }
   return personIdCache.get(key);
+}
+
+// Curated collections are resolved by name at request time too (no hardcoded
+// TMDB ids), and cached for the life of the process:
+//   keyword    -> with_keywords (exact name match)
+//   company    -> with_companies (every company whose name starts with the query)
+//   collection -> the movies of a TMDB collection, oldest first
+const lookupCache = new Map();
+
+function cachedLookup(key, load) {
+  if (!lookupCache.has(key)) {
+    const promise = load();
+    lookupCache.set(key, promise);
+    promise.catch(() => lookupCache.delete(key)); // retry after failures
+  }
+  return lookupCache.get(key);
+}
+
+// Returns extra discover params for keyword/company lookups, or null when
+// nothing on TMDB matches.
+function resolveDiscoverLookup({ kind, query }) {
+  return cachedLookup(`${kind}:${normalizeName(query)}`, async () => {
+    const wanted = normalizeName(query);
+
+    if (kind === "keyword") {
+      const data = await tmdb("/search/keyword", { query });
+      const hit = (data.results || []).find((k) => normalizeName(k.name) === wanted);
+      return hit ? { with_keywords: String(hit.id) } : null;
+    }
+
+    if (kind === "company") {
+      const data = await tmdb("/search/company", { query });
+      const ids = (data.results || [])
+        .filter((c) => normalizeName(c.name).startsWith(wanted))
+        .slice(0, 6)
+        .map((c) => c.id);
+      return ids.length ? { with_companies: ids.join("|") } : null;
+    }
+
+    return null;
+  });
+}
+
+// Movies of the first TMDB collection whose name contains the query.
+function loadCollectionMovies(query) {
+  return cachedLookup(`collection:${normalizeName(query)}`, async () => {
+    const wanted = normalizeName(query);
+    const search = await tmdb("/search/collection", { query });
+    const hit = (search.results || []).find((c) => normalizeName(c.name).includes(wanted));
+    if (!hit) return [];
+    const collection = await tmdb(`/collection/${hit.id}`);
+    return (collection.parts || []).filter((m) => m.poster_path);
+  });
 }
 
 // Search helper: if the query is (part of) the name of a known actor,
@@ -935,6 +1017,22 @@ builder.defineCatalogHandler(async (args) => {
     catalog.type === "movie" ? "/discover/movie" : "/discover/tv";
 
   const discoverParams = resolveParams(catalog.params);
+
+  if (catalog.lookup?.kind === "collection") {
+    // A collection is one fixed list (no paging): oldest film first.
+    const parts = page === 1 ? await loadCollectionMovies(catalog.lookup.query) : [];
+    const metas = [...parts]
+      .sort((a, b) => String(a.release_date || "").localeCompare(String(b.release_date || "")))
+      .map((item) => toMeta(item, catalog.type));
+    setCache(key, metas);
+    return { metas, cacheMaxAge: 900, staleRevalidate: 3600, staleIfError: 86400 };
+  }
+
+  if (catalog.lookup) {
+    const extra = await resolveDiscoverLookup(catalog.lookup);
+    if (!extra) return { metas: [] };
+    Object.assign(discoverParams, extra);
+  }
 
   if (catalog.person) {
     const person = await lookupPerson(catalog.person.name);
