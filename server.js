@@ -289,7 +289,7 @@ function resolveCatalogName(catalog) {
 const manifest = {
   id: "dk.danish.nuvio.katalog",
   version: "2.4.0",
-  name: "Dansk Film – Nuvio",
+  name: "Danish Nuvio Catalog",
   description:
     "Danske film og serier med dynamiske kataloger, søgning, metadata, kvalitetsfiltre og konfigurerbare kataloger.",
   logo: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiNjODEwMmUiLz48cmVjdCB4PSIyMCIgd2lkdGg9IjEwIiBoZWlnaHQ9IjY0IiBmaWxsPSIjZmZmIi8+PHJlY3QgeT0iMjciIHdpZHRoPSI2NCIgaGVpZ2h0PSIxMCIgZmlsbD0iI2ZmZiIvPjwvc3ZnPgo=",
@@ -868,7 +868,7 @@ const landingPage = (req) => {
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0b0f17">
 <meta name="description" content="Danish movies and TV series catalog addon for Nuvio.">
-<title>Danish Film – Nuvio</title>
+<title>Danish Nuvio Catalog</title>
 <style>
 :root{
   color-scheme:dark;
@@ -1015,7 +1015,7 @@ h2{font-size:20px;line-height:1.2;margin:0 0 7px}
 <body><main>
 <section class="hero">
   <div class="logo">🇩🇰</div>
-  <h1>Danish Film – Nuvio</h1>
+  <h1>Danish Nuvio Catalog</h1>
   <p>Danish movies and TV series in one place.</p>
 </section>
 
@@ -1140,13 +1140,13 @@ h2{font-size:20px;line-height:1.2;margin:0 0 7px}
 <section class="card">
   <h2>About this addon</h2>
   <p class="note">
-    Danish Film – Nuvio is a catalog and metadata addon focused on Danish movies
+    Danish Nuvio Catalog is a catalog and metadata addon focused on Danish movies
     and TV series. It does not provide video streams. Metadata is currently
     powered by TMDB.
   </p>
 </section>
 
-<div class="footer">Danish Film – Nuvio · Catalog &amp; metadata addon</div>
+<div class="footer">Danish Nuvio Catalog · Catalog &amp; metadata addon</div>
 </main>
 
 <script>
@@ -1455,5 +1455,5 @@ app.use((error, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Danish Film – Nuvio running on port ${PORT}`);
+  console.log(`Danish Nuvio Catalog running on port ${PORT}`);
 });
