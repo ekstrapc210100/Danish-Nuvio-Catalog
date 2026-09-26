@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: danske-stremio-katalog
+    name: danish-nuvio-catalog
     runtime: node
     buildCommand: npm install
     startCommand: npm start
