@@ -1515,6 +1515,145 @@ app.get("/internal/genres", async (req, res) => {
   }
 });
 
+// --- Status page ------------------------------------------------------------
+// Public, read-only overview of the database and the daily discovery job.
+// Only aggregate numbers are exposed — no secrets and no error messages.
+async function getStatus() {
+  const status = {
+    name: manifest.name,
+    version: manifest.version,
+    uptimeSeconds: Math.round(process.uptime()),
+    catalogs: { standard: catalogs.filter((c) => !c.optIn).length, optional: catalogs.filter((c) => c.optIn).length },
+    database: { configured: Boolean(pool), connected: false }
+  };
+
+  if (!pool) return status;
+
+  try {
+    const client = await pool.connect();
+    try {
+      const [totals, cursors, runs] = await Promise.all([
+        client.query(
+          `SELECT type, count(*)::int AS titles, max(last_updated_at) AS last_updated
+           FROM titles GROUP BY type`
+        ),
+        client.query(`SELECT type, next_page, total_pages_seen FROM discovery_state`),
+        client.query(
+          `SELECT started_at, finished_at, status, titles_found, titles_new, titles_updated
+           FROM discovery_runs ORDER BY id DESC LIMIT 5`
+        )
+      ]);
+
+      status.database.connected = true;
+      status.database.titles = Object.fromEntries(
+        totals.rows.map((r) => [r.type, { count: r.titles, lastUpdated: r.last_updated }])
+      );
+      status.database.cursors = Object.fromEntries(
+        cursors.rows.map((r) => [r.type, { nextPage: r.next_page, totalPages: r.total_pages_seen }])
+      );
+      status.discovery = runs.rows.map((r) => ({
+        startedAt: r.started_at,
+        finishedAt: r.finished_at,
+        status: r.status,
+        found: r.titles_found,
+        created: r.titles_new,
+        updated: r.titles_updated
+      }));
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error("Status query failed:", error.message);
+  }
+
+  return status;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[ch]);
+}
+
+function formatWhen(value) {
+  if (!value) return "–";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "–";
+  return d.toLocaleString("da-DK", { timeZone: "Europe/Copenhagen", dateStyle: "medium", timeStyle: "short" });
+}
+
+function formatUptime(seconds) {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return h ? `${h} t ${m} min` : `${m} min`;
+}
+
+function statusPage(s) {
+  const db = s.database;
+  const dbLabel = !db.configured ? "Ikke sat op" : db.connected ? "Forbundet" : "Fejl";
+  const dbClass = db.connected ? "ok" : db.configured ? "bad" : "warn";
+  const titles = db.titles || {};
+  const cursors = db.cursors || {};
+  const kinds = [["movie", "Film"], ["series", "Serier"]];
+
+  const tiles = kinds
+    .map(([key, label]) => {
+      const t = titles[key];
+      const c = cursors[key];
+      return `<div class="tile"><div class="num">${t ? t.count.toLocaleString("da-DK") : "–"}</div>
+        <div class="lbl">${label} i databasen</div>
+        <div class="sub">Sidst opdateret ${escapeHtml(formatWhen(t?.lastUpdated))}</div>
+        <div class="sub">${c ? `Opdagelse: side ${c.nextPage} af ${c.totalPages ?? "?"}` : ""}</div></div>`;
+    })
+    .join("");
+
+  const rows = (s.discovery || [])
+    .map(
+      (r) => `<tr><td>${escapeHtml(formatWhen(r.startedAt))}</td>
+        <td><span class="pill ${r.status === "success" ? "ok" : r.status === "running" ? "warn" : "bad"}">${escapeHtml(r.status)}</span></td>
+        <td>${r.found ?? "–"}</td><td>${r.created ?? "–"}</td><td>${r.updated ?? "–"}</td></tr>`
+    )
+    .join("");
+
+  return `<!doctype html>
+<html lang="da"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Status – ${escapeHtml(s.name)}</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--muted:#666;--card:#f4f4f5;--line:#e4e4e7;--red:#c8102e;--ok:#15803d;--warn:#b45309;--bad:#b91c1c}
+@media(prefers-color-scheme:dark){:root{--bg:#111;--fg:#f4f4f5;--muted:#a1a1aa;--card:#1c1c1f;--line:#2e2e33;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif}
+main{max-width:760px;margin:0 auto;padding:24px 16px 48px}
+h1{margin:0 0 4px;font-size:1.6rem}h2{margin:32px 0 12px;font-size:1.1rem}
+.muted{color:var(--muted)}a{color:var(--red)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.num{font-size:2rem;font-weight:700}.lbl{font-weight:600}.sub{color:var(--muted);font-size:.85rem}
+.pill{display:inline-block;padding:1px 10px;border-radius:99px;font-size:.8rem;font-weight:600;border:1px solid currentColor}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.table{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:.9rem}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}th{color:var(--muted);font-weight:600}
+</style></head><body><main>
+<h1>${escapeHtml(s.name)} – status</h1>
+<p class="muted">Version ${escapeHtml(s.version)} · oppetid ${escapeHtml(formatUptime(s.uptimeSeconds))} · ${s.catalogs.standard} standardkataloger + ${s.catalogs.optional} valgfrie</p>
+<h2>Database <span class="pill ${dbClass}">${dbLabel}</span></h2>
+<div class="grid">${tiles}</div>
+<h2>Seneste discovery-kørsler</h2>
+${rows ? `<div class="table"><table><thead><tr><th>Startet</th><th>Status</th><th>Fundet</th><th>Nye</th><th>Opdateret</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p class="muted">Ingen kørsler endnu.</p>`}
+<p class="muted" style="margin-top:32px"><a href="/">← Tilbage til installation</a> · <a href="/status.json">JSON</a></p>
+</main></body></html>`;
+}
+
+app.get("/status.json", async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json(await getStatus());
+});
+
+app.get("/status", async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.type("html").send(statusPage(await getStatus()));
+});
+
 // Streaming providers available in Denmark (TMDB watch-provider ids), for
 // checking the ids in STREAMING_PROVIDERS and for later custom categories.
 app.get("/internal/providers", async (req, res) => {
