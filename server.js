@@ -287,19 +287,19 @@ const catalogs = [
 // /manifest.json and unchecked by default on the landing page, so existing
 // installs don't suddenly gain a dozen extra catalogs. Provider ids are
 // TMDB watch-provider ids (see /internal/providers for the live DK list).
-// The database has no provider data, so these are always served live from
-// TMDB (see buildDbCatalogQuery).
+// `types` limits a provider to movies and/or series where TMDB has no Danish
+// titles for the other type. The database has no provider data, so these are
+// always served live from TMDB (see buildDbCatalogQuery).
 const STREAMING_PROVIDERS = [
   { key: "netflix", id: 8, name: "Netflix" },
-  { key: "disney", id: 337, name: "Disney+" },
+  { key: "disney", id: 337, name: "Disney+", types: ["movie"] },
   { key: "prime", id: 119, name: "Prime Video" },
   { key: "viaplay", id: 76, name: "Viaplay" },
   { key: "hbomax", id: 1899, name: "HBO Max" },
   { key: "skyshowtime", id: 1773, name: "SkyShowtime" },
   { key: "tv2", id: 383, name: "TV 2 Play" },
   { key: "drtv", id: 620, name: "DRTV" },
-  { key: "apple", id: 350, name: "Apple TV+" },
-  { key: "nordiskfilm", id: 621, name: "Nordisk Film+" }
+  { key: "nordiskfilm", id: 621, name: "Nordisk Film+", types: ["movie"] }
 ];
 
 for (const provider of STREAMING_PROVIDERS) {
@@ -312,22 +312,27 @@ for (const provider of STREAMING_PROVIDERS) {
     sort_by: "popularity.desc"
   };
 
-  catalogs.push(
-    {
+  const types = provider.types || ["movie", "series"];
+
+  if (types.includes("movie")) {
+    catalogs.push({
       type: "movie",
       id: `streaming_${provider.key}_film`,
       name: `📺 Danske film på ${provider.name}`,
       optIn: true,
       params: { ...streamingParams }
-    },
-    {
+    });
+  }
+
+  if (types.includes("series")) {
+    catalogs.push({
       type: "series",
       id: `streaming_${provider.key}_serier`,
       name: `📺 Danske serier på ${provider.name}`,
       optIn: true,
       params: { ...streamingParams }
-    }
-  );
+    });
+  }
 }
 
 function resolveCatalogName(catalog) {
