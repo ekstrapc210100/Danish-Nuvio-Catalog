@@ -279,6 +279,34 @@ const catalogs = [
       "vote_count.gte": "20",
       sort_by: "popularity.desc"
     }
+  },
+  // Upcoming titles: soonest first, no vote-count floor (unreleased titles
+  // have no votes). `live` skips the database, which only holds already
+  // discovered titles and would go stale on dates/posters; `showDate` puts the
+  // full release date in the poster subtitle instead of just the year.
+  {
+    type: "movie",
+    id: "kommer_snart_film",
+    name: "🗓️ Kommer snart – film",
+    live: true,
+    showDate: true,
+    params: {
+      ...DANISH_FILTER,
+      ...releaseDateParams("movie", { gte: TODAY }),
+      sort_by: "primary_release_date.asc"
+    }
+  },
+  {
+    type: "series",
+    id: "kommer_snart_serier",
+    name: "🗓️ Kommer snart – serier",
+    live: true,
+    showDate: true,
+    params: {
+      ...DANISH_FILTER,
+      ...releaseDateParams("series", { gte: TODAY }),
+      sort_by: "first_air_date.asc"
+    }
   }
 ];
 
@@ -341,7 +369,7 @@ function resolveCatalogName(catalog) {
 
 const manifest = {
   id: "dk.danish.nuvio.katalog",
-  version: "2.5.0",
+  version: "2.6.0",
   name: "Danish Nuvio Catalog",
   description:
     "Danske film og serier med dynamiske kataloger, søgning, metadata, kvalitetsfiltre og konfigurerbare kataloger.",
@@ -600,6 +628,27 @@ function isDanish(item, type) {
   return countries.length === 0 || countries.includes("DK");
 }
 
+// For catalogs flagged `showDate` (upcoming titles): expose the exact release
+// date, e.g. "12. nov. 2026", in place of the bare year.
+function withFullDate(meta, item, catalog) {
+  if (!catalog.showDate) return meta;
+
+  const date = catalog.type === "movie" ? item.release_date : item.first_air_date;
+  if (!date) return meta;
+
+  const parsed = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return meta;
+
+  meta.released = parsed.toISOString();
+  meta.releaseInfo = parsed.toLocaleDateString("da-DK", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC"
+  });
+  return meta;
+}
+
 function dbRowToMeta(row, type) {
   const posterPath = row.poster_path;
   const backdropPath = row.backdrop_path;
@@ -695,7 +744,7 @@ function buildDbCatalogQuery(catalog, page) {
 }
 
 async function queryCatalogFromDb(catalog, page) {
-  if (!pool) return null;
+  if (!pool || catalog.live) return null;
 
   const query = buildDbCatalogQuery(catalog, page);
   if (!query) return null;
@@ -799,7 +848,7 @@ builder.defineCatalogHandler(async (args) => {
   const metas = (data.results || [])
     .filter((item) => item.original_language === "da")
     .filter((item) => item.poster_path)
-    .map((item) => toMeta(item, catalog.type));
+    .map((item) => withFullDate(toMeta(item, catalog.type), item, catalog));
 
   setCache(key, metas);
 
