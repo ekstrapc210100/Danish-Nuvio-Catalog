@@ -7,3 +7,9 @@ services:
     envVars:
       - key: TMDB_API_KEY
         sync: false
+      # Postgres connection string; without it catalogs are served live from TMDB.
+      - key: DATABASE_URL
+        sync: false
+      # Shared secret for POST /internal/discover (also stored as a GitHub Actions secret).
+      - key: DISCOVER_SECRET
+        sync: false
