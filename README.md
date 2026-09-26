@@ -6,7 +6,6 @@
 
 [![Live addon](https://img.shields.io/badge/live-addon-c8102e?logo=render&logoColor=white)](https://danish-nuvio-catalog.onrender.com)
 [![Daily discovery](https://github.com/ekstrapc210100/Danish-Nuvio-Catalog/actions/workflows/discover.yml/badge.svg)](https://github.com/ekstrapc210100/Danish-Nuvio-Catalog/actions/workflows/discover.yml)
-[![Keep awake](https://github.com/ekstrapc210100/Danish-Nuvio-Catalog/actions/workflows/keepalive.yml/badge.svg)](https://github.com/ekstrapc210100/Danish-Nuvio-Catalog/actions/workflows/keepalive.yml)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![Data: TMDB](https://img.shields.io/badge/data-TMDB-01b4e4)](https://www.themoviedb.org/)
 
@@ -58,8 +57,8 @@
 The standard manifest is also available directly at
 `https://danish-nuvio-catalog.onrender.com/manifest.json`.
 
-> The addon runs on a free Render plan. A keep-alive workflow pings it every
-> 10 minutes, so the first request after a quiet spell is normally fast.
+> The addon runs on a free Render plan. An external uptime monitor pings it
+> every 5 minutes, so the first request after a quiet spell is normally fast.
 
 ## 🎞️ Catalogs
 
@@ -131,7 +130,7 @@ flowchart LR
     S -->|2. fallback · streaming · upcoming| T[TMDB API]
     G[GitHub Actions<br/>daily] -->|POST /internal/discover| S
     S -->|discover.js upserts titles| DB
-    G2[GitHub Actions<br/>every 10 min] -->|GET /manifest.json| S
+    U[Uptime monitor<br/>every 5 min] -->|GET /manifest.json| S
 ```
 
 - **Catalog requests** are answered from the Postgres `titles` table when it has
@@ -143,7 +142,7 @@ flowchart LR
   with a stored cursor, so the whole catalog fills in gradually.
 - **Scheduling** is done with free GitHub Actions instead of a paid Render Cron
   Job. The daily run calls `POST /internal/discover`, protected by a shared
-  secret. A second workflow keeps the free Render service awake.
+  secret. An external uptime monitor keeps the free Render service awake.
 - **Search** looks up titles and, for movies, also checks whether the query is an
   actor's or director's name and adds their Danish films.
 - **Status:** `/status` (and `/status.json`) shows database connectivity, title
@@ -200,8 +199,7 @@ Pushing to `main` deploys automatically.
 ├── render.yaml                     Render service definition
 ├── package.json
 └── .github/workflows/
-    ├── discover.yml                Daily discovery trigger
-    └── keepalive.yml               Keeps the free Render service awake
+    └── discover.yml                Daily discovery trigger (and one-off backfill)
 ```
 
 ## 🎬 TMDB attribution
