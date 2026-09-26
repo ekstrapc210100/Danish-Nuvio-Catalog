@@ -1,6 +1,7 @@
 const { addonBuilder, getRouter } = require("stremio-addon-sdk");
 const express = require("express");
 const { Pool } = require("pg");
+const crypto = require("crypto");
 const { runDiscovery } = require("./discover");
 
 const PORT = Number(process.env.PORT) || 7000;
@@ -1408,13 +1409,27 @@ app.get("/internal/genres", async (req, res) => {
 });
 
 // Triggers a discovery pass that pulls fresh pages from TMDB and upserts
-// them into the persistent Postgres database (see discover.js). Safe to
-// expose without a secret: runDiscovery() no-ops (returns the previous
-// run's summary) if it was already run within the last hour, so this can't
-// be abused for anything worse than a few extra harmless TMDB calls. It's
-// meant to be hit once a day by a free scheduled trigger (this project has
-// no paid Render Cron Job, so a GitHub Actions workflow calls this instead).
+// them into the persistent Postgres database (see discover.js). It's meant
+// to be hit once a day by a free scheduled trigger (this project has no paid
+// Render Cron Job, so a GitHub Actions workflow calls this instead).
+// Protected by a shared secret (DISCOVER_SECRET, sent as
+// "Authorization: Bearer <secret>") so only that workflow can start a run.
+// If the secret is not configured the endpoint stays locked (fail closed).
+function hasValidDiscoverSecret(req) {
+  const expected = process.env.DISCOVER_SECRET;
+  if (!expected) return false;
+  const header = req.get("authorization") || "";
+  const provided = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const a = crypto.createHash("sha256").update(provided).digest();
+  const b = crypto.createHash("sha256").update(expected).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
 app.post("/internal/discover", async (req, res) => {
+  if (!hasValidDiscoverSecret(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
   if (!process.env.DATABASE_URL) {
     return res.status(501).json({ error: "DATABASE_URL not configured" });
   }
