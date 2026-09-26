@@ -26,9 +26,9 @@ const TMDB_BASE = "https://api.themoviedb.org/3";
 // top of always refreshing page 1. TMDB returns 20 results/page.
 const DEFAULT_PAGES_PER_RUN = 6;
 
-// Minimum time between runs, to keep the endpoint safe to expose without a
-// secret: hitting it more often than this just returns the last result
-// instead of doing real work again.
+// Minimum time between runs: hitting the endpoint more often than this just
+// returns the last result instead of doing real work again. (The endpoint
+// itself is also protected by DISCOVER_SECRET, see server.js.)
 const MIN_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
 async function tmdbFetch(apiKey, path, params = {}) {
@@ -205,8 +205,7 @@ async function setCursor(client, type, nextPage, totalPages) {
 /**
  * Runs one discovery pass and upserts results into Postgres.
  * Skips the work (returns the previous run's summary) if the last run was
- * more recent than MIN_INTERVAL_MS, so this is safe to expose as a public
- * endpoint without a secret.
+ * more recent than MIN_INTERVAL_MS, which limits the damage of repeated calls.
  */
 async function runDiscovery({ apiKey, databaseUrl, pagesPerRun = DEFAULT_PAGES_PER_RUN, force = false } = {}) {
   if (!apiKey) throw new Error("Missing TMDB API key");
