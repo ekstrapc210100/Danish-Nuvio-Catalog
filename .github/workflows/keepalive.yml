@@ -1,0 +1,22 @@
+name: Keep addon awake
+
+on:
+  schedule:
+    # Render's free plan spins the service down after ~15 minutes without
+    # traffic, so the first Nuvio/Stremio request after a quiet spell is very
+    # slow. A light request every 10 minutes keeps it warm. GitHub may delay
+    # scheduled runs a few minutes, which is still well inside the window.
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Request the manifest
+        run: |
+          curl -sS -o /dev/null \
+            --max-time 120 \
+            --retry 2 --retry-delay 15 --retry-all-errors --fail-with-body \
+            -w "HTTP status: %{http_code} in %{time_total}s\n" \
+            https://danish-nuvio-catalog.onrender.com/manifest.json
