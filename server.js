@@ -363,13 +363,45 @@ for (const provider of STREAMING_PROVIDERS) {
   }
 }
 
+// Danish films by actor or director. Opt-in and served live from TMDB (the
+// person is resolved by name at request time, see lookupPerson). Movies only.
+const PEOPLE = [
+  { key: "mads_mikkelsen", name: "Mads Mikkelsen", role: "cast" },
+  { key: "nikolaj_lie_kaas", name: "Nikolaj Lie Kaas", role: "cast" },
+  { key: "trine_dyrholm", name: "Trine Dyrholm", role: "cast" },
+  { key: "pilou_asbaek", name: "Pilou Asbæk", role: "cast" },
+  { key: "nikolaj_coster_waldau", name: "Nikolaj Coster-Waldau", role: "cast" },
+  { key: "lars_von_trier", name: "Lars von Trier", role: "crew" },
+  { key: "thomas_vinterberg", name: "Thomas Vinterberg", role: "crew" },
+  { key: "susanne_bier", name: "Susanne Bier", role: "crew" }
+];
+
+for (const person of PEOPLE) {
+  catalogs.push({
+    type: "movie",
+    id: `person_${person.key}`,
+    name:
+      person.role === "crew"
+        ? `🎬 Film af ${person.name}`
+        : `🎭 Film med ${person.name}`,
+    optIn: true,
+    live: true,
+    person: { name: person.name, role: person.role },
+    params: {
+      ...DANISH_FILTER,
+      "vote_count.gte": "1",
+      sort_by: "popularity.desc"
+    }
+  });
+}
+
 function resolveCatalogName(catalog) {
   return catalog.name.replace("{YEAR}", String(new Date().getUTCFullYear()));
 }
 
 const manifest = {
   id: "dk.danish.nuvio.katalog",
-  version: "2.6.0",
+  version: "2.7.0",
   name: "Danish Nuvio Catalog",
   description:
     "Danske film og serier med dynamiske kataloger, søgning, metadata, kvalitetsfiltre og konfigurerbare kataloger.",
@@ -487,6 +519,60 @@ function getCached(key, maxAge) {
   }
 
   return entry.data;
+}
+
+// --- People (actors / directors) --------------------------------------------
+// People are looked up by name so no TMDB person ids are hardcoded. Ids are
+// cached for the life of the process.
+const personIdCache = new Map();
+
+function normalizeName(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .trim();
+}
+
+async function lookupPerson(name) {
+  const key = normalizeName(name);
+  if (!personIdCache.has(key)) {
+    personIdCache.set(
+      key,
+      tmdb("/search/person", { query: name }).then((data) => {
+        const wanted = normalizeName(name);
+        const hit = (data.results || []).find((p) => normalizeName(p.name) === wanted);
+        return hit ? { id: hit.id, name: hit.name, department: hit.known_for_department } : null;
+      })
+    );
+    // Don't remember failures (network hiccup) — retry next time.
+    personIdCache.get(key).catch(() => personIdCache.delete(key));
+  }
+  return personIdCache.get(key);
+}
+
+// Search helper: if the query is (part of) the name of a known actor,
+// director or writer, return their Danish films so "mads mikkelsen" finds
+// films, not just titles containing those words. Movies only.
+async function findPersonFilmography(query) {
+  const wanted = normalizeName(query);
+  if (wanted.length < 4) return [];
+
+  const data = await tmdb("/search/person", { query });
+  const person = (data.results || []).find(
+    (p) =>
+      ["Acting", "Directing", "Writing"].includes(p.known_for_department) &&
+      normalizeName(p.name).includes(wanted)
+  );
+  if (!person) return [];
+
+  const role = person.known_for_department === "Acting" ? "with_cast" : "with_crew";
+  const films = await tmdb("/discover/movie", {
+    ...DANISH_FILTER,
+    [role]: String(person.id),
+    sort_by: "popularity.desc"
+  });
+  return films.results || [];
 }
 
 function tmdbParams(params = {}) {
@@ -790,18 +876,26 @@ builder.defineCatalogHandler(async (args) => {
     const searchPath =
       catalog.type === "movie" ? "/search/movie" : "/search/tv";
 
-    const data = await tmdb(searchPath, {
-      query: String(args.extra.search).trim(),
-      page,
-      region: "DK"
-    });
+    const query = String(args.extra.search).trim();
+
+    const [data, personItems] = await Promise.all([
+      tmdb(searchPath, { query, page, region: "DK" }),
+      page === 1 && catalog.type === "movie"
+        ? findPersonFilmography(query).catch((error) => {
+            console.error("Person search failed:", error.message);
+            return [];
+          })
+        : []
+    ]);
+
+    // Title matches first, then films from a matching actor/director.
+    const seen = new Set();
+    const items = [...(data.results || []).filter((item) => isDanish(item, catalog.type)), ...personItems]
+      .filter((item) => item.poster_path)
+      .filter((item) => !seen.has(item.id) && seen.add(item.id));
 
     return {
-      metas: (data.results || [])
-        .filter((item) => isDanish(item, catalog.type))
-        .filter((item) => item.poster_path)
-        .slice(0, 20)
-        .map((item) => toMeta(item, catalog.type))
+      metas: items.slice(0, 20).map((item) => toMeta(item, catalog.type))
     };
   }
 
@@ -840,8 +934,16 @@ builder.defineCatalogHandler(async (args) => {
   const path =
     catalog.type === "movie" ? "/discover/movie" : "/discover/tv";
 
+  const discoverParams = resolveParams(catalog.params);
+
+  if (catalog.person) {
+    const person = await lookupPerson(catalog.person.name);
+    if (!person) return { metas: [] };
+    discoverParams[catalog.person.role === "crew" ? "with_crew" : "with_cast"] = String(person.id);
+  }
+
   const data = await tmdb(path, {
-    ...resolveParams(catalog.params),
+    ...discoverParams,
     page
   });
 
