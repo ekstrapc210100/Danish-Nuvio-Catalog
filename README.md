@@ -5,6 +5,7 @@
 **Danish movies and TV series for [Nuvio](https://nuvioapp.space/) — curated catalogs, streaming-service filters, upcoming releases and search.**
 
 [![Live addon](https://img.shields.io/badge/live-addon-c8102e?logo=render&logoColor=white)](https://danish-nuvio-catalog.onrender.com)
+[![CI](https://github.com/ekstrapc210100/Danish-Nuvio-Catalog/actions/workflows/ci.yml/badge.svg)](https://github.com/ekstrapc210100/Danish-Nuvio-Catalog/actions/workflows/ci.yml)
 [![Daily discovery](https://github.com/ekstrapc210100/Danish-Nuvio-Catalog/actions/workflows/discover.yml/badge.svg)](https://github.com/ekstrapc210100/Danish-Nuvio-Catalog/actions/workflows/discover.yml)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![Data: TMDB](https://img.shields.io/badge/data-TMDB-01b4e4)](https://www.themoviedb.org/)
@@ -25,6 +26,8 @@
 - 📺 **16 optional streaming catalogs** — Danish titles on Netflix, Disney+,
   Prime Video, Viaplay, HBO Max, SkyShowtime, TV 2 Play, DRTV and Nordisk Film+
 - 🗓️ **Kommer snart** — upcoming Danish films and series with exact release dates
+- 🎄 **Curated collections** — Danish Christmas films and calendars, Nordic Noir,
+  Dogme 95, Olsen-banden, Far til fire, Zentropa and Nordisk Film
 - 🎭 **Actor and director catalogs** — Danish films with or by Mads Mikkelsen,
   Trine Dyrholm, Lars von Trier, Thomas Vinterberg and more
 - 🔎 **Search** by title *or* by actor/director name, scoped to Danish titles
@@ -42,6 +45,7 @@
 - [How it works](#-how-it-works)
 - [Configuration](#-configuration)
 - [Run locally](#-run-locally)
+- [Tests](#-tests)
 - [Deployment](#-deployment)
 - [Project structure](#-project-structure)
 - [TMDB attribution](#-tmdb-attribution)
@@ -115,6 +119,21 @@ producer credit can occasionally bring in an extra film.
 |---|---|
 | Mads Mikkelsen · Nikolaj Lie Kaas · Trine Dyrholm · Pilou Asbæk · Nikolaj Coster-Waldau | Lars von Trier · Thomas Vinterberg · Susanne Bier |
 
+### Curated collections (optional)
+
+Hand-picked themes, also **off by default**. They are looked up on TMDB by
+keyword, collection or production company at request time.
+
+| Collection | Type |
+|---|---|
+| 🎄 Danske julefilm | Movie |
+| 🎄 Danske julekalendere og julserier | Series |
+| 🕵️ Nordic Noir | Movie · Series |
+| 🎞️ Dogme 95 | Movie |
+| 🎩 Olsen-banden | Movie |
+| 👨‍👩‍👧‍👦 Far til fire | Movie |
+| 🎬 Zentropa · Nordisk Film | Movie |
+
 ### Custom categories
 
 The web installer can also build personal categories from a genre, minimum
@@ -177,6 +196,16 @@ TMDB_API_KEY=YOUR_TMDB_API_KEY npm start
 The addon is then available at `http://localhost:7000/manifest.json`.
 Add `DATABASE_URL` to use the database, and run `npm run discover` to fill it.
 
+## ✅ Tests
+
+```bash
+npm test
+```
+
+Smoke tests boot the real server (no database, fake TMDB key) and check the
+manifest, personal install links, the installer and status pages, and that
+`/internal/discover` is locked. They also run on every push via GitHub Actions.
+
 ## 🚀 Deployment
 
 Configured for [Render](https://render.com) through `render.yaml`, and works on
@@ -198,7 +227,9 @@ Pushing to `main` deploys automatically.
 ├── discover.js                     Daily TMDB → Postgres discovery
 ├── render.yaml                     Render service definition
 ├── package.json
+├── test/smoke.test.js              Smoke tests (`npm test`)
 └── .github/workflows/
+    ├── ci.yml                      Runs the tests on every push
     └── discover.yml                Daily discovery trigger (and one-off backfill)
 ```
 
