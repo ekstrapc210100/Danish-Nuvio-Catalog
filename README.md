@@ -239,9 +239,8 @@ This product uses the TMDB API but is not endorsed or certified by TMDB.
 
 ## 📄 License
 
-No open-source license has currently been declared for this project. Unless a
-license is added to the repository, it should be treated as **all rights
-reserved**.
+Released under the [MIT License](LICENSE). Movie and series data comes from
+TMDB and remains subject to [TMDB's terms of use](https://www.themoviedb.org/api-terms-of-use).
 
 ## ⚠️ Disclaimer
 

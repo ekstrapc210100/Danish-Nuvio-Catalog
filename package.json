@@ -2,6 +2,7 @@
   "name": "danish-nuvio-catalog",
   "version": "2.8.0",
   "description": "Catalog and metadata addon for Nuvio focused on Danish movies and TV series.",
+  "license": "MIT",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
