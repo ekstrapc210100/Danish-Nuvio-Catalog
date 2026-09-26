@@ -15,5 +15,6 @@ jobs:
         run: |
           curl -sS -X POST \
             --max-time 280 \
+            --retry 3 --retry-delay 20 --retry-all-errors --fail-with-body \
             -w "\nHTTP status: %{http_code}\n" \
             https://danish-nuvio-catalog.onrender.com/internal/discover
