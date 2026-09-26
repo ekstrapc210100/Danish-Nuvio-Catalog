@@ -295,7 +295,11 @@ const STREAMING_PROVIDERS = [
   { key: "prime", id: 119, name: "Prime Video" },
   { key: "viaplay", id: 76, name: "Viaplay" },
   { key: "hbomax", id: 1899, name: "HBO Max" },
-  { key: "skyshowtime", id: 1773, name: "SkyShowtime" }
+  { key: "skyshowtime", id: 1773, name: "SkyShowtime" },
+  { key: "tv2", id: 383, name: "TV 2 Play" },
+  { key: "drtv", id: 620, name: "DRTV" },
+  { key: "apple", id: 350, name: "Apple TV+" },
+  { key: "nordiskfilm", id: 621, name: "Nordisk Film+" }
 ];
 
 for (const provider of STREAMING_PROVIDERS) {
