@@ -282,13 +282,57 @@ const catalogs = [
   }
 ];
 
+// Danish titles that are currently streamable (flat-rate subscription) in
+// Denmark on a given provider. Opt-in: these are left out of the standard
+// /manifest.json and unchecked by default on the landing page, so existing
+// installs don't suddenly gain a dozen extra catalogs. Provider ids are
+// TMDB watch-provider ids (see /internal/providers for the live DK list).
+// The database has no provider data, so these are always served live from
+// TMDB (see buildDbCatalogQuery).
+const STREAMING_PROVIDERS = [
+  { key: "netflix", id: 8, name: "Netflix" },
+  { key: "disney", id: 337, name: "Disney+" },
+  { key: "prime", id: 119, name: "Prime Video" },
+  { key: "viaplay", id: 76, name: "Viaplay" },
+  { key: "hbomax", id: 1899, name: "HBO Max" },
+  { key: "skyshowtime", id: 1773, name: "SkyShowtime" }
+];
+
+for (const provider of STREAMING_PROVIDERS) {
+  const streamingParams = {
+    ...DANISH_FILTER,
+    watch_region: "DK",
+    with_watch_providers: String(provider.id),
+    with_watch_monetization_types: "flatrate",
+    "vote_count.gte": "1",
+    sort_by: "popularity.desc"
+  };
+
+  catalogs.push(
+    {
+      type: "movie",
+      id: `streaming_${provider.key}_film`,
+      name: `📺 Danske film på ${provider.name}`,
+      optIn: true,
+      params: { ...streamingParams }
+    },
+    {
+      type: "series",
+      id: `streaming_${provider.key}_serier`,
+      name: `📺 Danske serier på ${provider.name}`,
+      optIn: true,
+      params: { ...streamingParams }
+    }
+  );
+}
+
 function resolveCatalogName(catalog) {
   return catalog.name.replace("{YEAR}", String(new Date().getUTCFullYear()));
 }
 
 const manifest = {
   id: "dk.danish.nuvio.katalog",
-  version: "2.4.0",
+  version: "2.5.0",
   name: "Danish Nuvio Catalog",
   description:
     "Danske film og serier med dynamiske kataloger, søgning, metadata, kvalitetsfiltre og konfigurerbare kataloger.",
@@ -298,7 +342,7 @@ const manifest = {
     { name: "meta", types: ["movie", "series"], idPrefixes: ["tmdb:"] }
   ],
   types: ["movie", "series"],
-  catalogs: catalogs.map((catalog) => ({
+  catalogs: catalogs.filter((catalog) => !catalog.optIn).map((catalog) => ({
     type: catalog.type,
     id: catalog.id,
     name: resolveCatalogName(catalog),
@@ -577,6 +621,10 @@ function dbRowToMeta(row, type) {
 // against the local schema, so the caller falls back to live TMDB.
 function buildDbCatalogQuery(catalog, page) {
   const params = resolveParams(catalog.params);
+
+  // The titles table holds no streaming-provider data — let live TMDB answer.
+  if (params.with_watch_providers) return null;
+
   const dateField = catalog.type === "movie" ? "primary_release_date" : "first_air_date";
   const limit = 20;
   const offset = (page - 1) * limit;
@@ -857,7 +905,8 @@ const landingPage = (req) => {
     catalogs.map((catalog) => ({
       id: catalog.id,
       type: catalog.type,
-      name: resolveCatalogName(catalog)
+      name: resolveCatalogName(catalog),
+      optIn: Boolean(catalog.optIn)
     }))
   ).replace(/</g, "\\u003c");
 
@@ -1170,7 +1219,7 @@ function render(){
 
     const input=document.createElement("input");
     input.type="checkbox";
-    input.checked=true;
+    input.checked=!c.optIn;
     input.dataset.id=c.id;
     input.addEventListener("change",update);
 
@@ -1372,7 +1421,7 @@ app.get("/", (req, res) => {
 });
 
 app.get("/manifest.json", (req, res) => {
-  res.json(manifestFor(catalogs));
+  res.json(manifestFor(catalogs.filter((catalog) => !catalog.optIn)));
 });
 
 app.get("/c/:config/manifest.json", (req, res) => {
@@ -1405,6 +1454,23 @@ app.get("/internal/genres", async (req, res) => {
   } catch (error) {
     console.error("Genre list error:", error.message);
     res.status(502).json({ error: "Failed to load genres" });
+  }
+});
+
+// Streaming providers available in Denmark (TMDB watch-provider ids), for
+// checking the ids in STREAMING_PROVIDERS and for later custom categories.
+app.get("/internal/providers", async (req, res) => {
+  try {
+    const [movieData, tvData] = await Promise.all([
+      tmdb("/watch/providers/movie", { watch_region: "DK" }),
+      tmdb("/watch/providers/tv", { watch_region: "DK" })
+    ]);
+    const simplify = (data) =>
+      (data.results || []).map((p) => ({ id: p.provider_id, name: p.provider_name }));
+    res.json({ movie: simplify(movieData), tv: simplify(tvData) });
+  } catch (error) {
+    console.error("Provider list error:", error.message);
+    res.status(502).json({ error: "Failed to load providers" });
   }
 });
 
